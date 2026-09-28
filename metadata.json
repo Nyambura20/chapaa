@@ -1,0 +1,6 @@
+{
+  "name": "CHAPAA-GUARD: Unified Fraud Defense & QoS Intelligence Center",
+  "description": "Africa's Talking Telecom Innovate Hackathon project: Real-time smishing defense, Paybill fraud interception, zero-trust POS handshake, and distributed QoS telemetry.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
