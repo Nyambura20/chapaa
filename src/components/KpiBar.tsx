@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldAlert, GraduationCap, CreditCard, Smartphone, Hourglass, TrendingUp } from 'lucide-react';
+import { ShieldAlert, GraduationCap, Smartphone, Hourglass, TrendingUp } from 'lucide-react';
 import { KpiMetrics } from '../types';
 
 interface KpiBarProps {
@@ -12,7 +12,7 @@ export const KpiBar: React.FC<KpiBarProps> = ({ metrics }) => {
       <div className="text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-2 px-0.5">
         Operational Metrics
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {/* 1. Scams Intercepted (Rose) */}
         <div className="relative overflow-hidden rounded-xl bg-white border border-slate-200/90 p-3.5 shadow-xs hover:shadow-sm transition">
           <div className="flex items-start justify-between">
@@ -55,28 +55,7 @@ export const KpiBar: React.FC<KpiBarProps> = ({ metrics }) => {
           </div>
         </div>
 
-        {/* 3. POS Handshakes (Emerald) */}
-        <div className="relative overflow-hidden rounded-xl bg-white border border-slate-200/90 p-3.5 shadow-xs hover:shadow-sm transition">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-100">
-                <CreditCard className="w-5 h-5" />
-              </div>
-              <div>
-                <p className="text-[12px] font-medium text-slate-600">POS Handshakes</p>
-                <div className="flex items-baseline gap-1.5">
-                  <span className="text-2xl font-bold font-mono text-slate-900">{metrics.posHandshakes}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="mt-2 text-[11px] text-emerald-700 font-medium flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>100% Zero-Trust Verified</span>
-          </div>
-        </div>
-
-        {/* 4. Device Pings (Sky/Blue) */}
+        {/* 3. Device Pings (Sky/Blue) */}
         <div className="relative overflow-hidden rounded-xl bg-white border border-slate-200/90 p-3.5 shadow-xs hover:shadow-sm transition">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-2.5">
@@ -98,7 +77,7 @@ export const KpiBar: React.FC<KpiBarProps> = ({ metrics }) => {
         </div>
 
         {/* 5. Live Canaries (Amber/Yellow) */}
-        <div className="relative overflow-hidden rounded-xl bg-white border border-slate-200/90 p-3.5 shadow-xs hover:shadow-sm transition col-span-2 md:col-span-1">
+        <div className="relative overflow-hidden rounded-xl bg-white border border-slate-200/90 p-3.5 shadow-xs hover:shadow-sm transition">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-2.5">
               <div className="p-2 rounded-lg bg-amber-50 text-amber-600 border border-amber-100">

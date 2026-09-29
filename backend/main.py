@@ -4,12 +4,14 @@ FastAPI Backend Application with Lifespan Management, AT Webhooks,
 REST API, and WebSocket SecOps stream.
 """
 
-import os
-import uuid
+import hashlib
 import logging
-from datetime import datetime
+import os
+import secrets
+import uuid
 from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
 from fastapi import (
     FastAPI,
@@ -17,10 +19,8 @@ from fastapi import (
     HTTPException,
     WebSocket,
     WebSocketDisconnect,
-    Form,
     Request,
     Response,
-    status,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -29,21 +29,23 @@ from sqlalchemy import select, desc, func
 
 from backend.database import engine, Base, get_db
 from backend.models import (
-    VerifiedEntity,
+    AuditLog,
     BlacklistEntity,
-    ThreatLog,
-    PosTransaction,
+    KycAttempt,
     QoSTelemetry,
+    SimSwapRequest,
+    SimSwapStatus,
     ThreatCategory,
-    PosTransactionStatus,
-    EntityType,
+    ThreatLog,
+    VerifiedEntity,
 )
+from backend.face_match import FACE_PASS_SCORE, FaceMatchError, compare_faces
 from backend.parser import (
     extract_entities_from_text,
     classify_category,
     compute_threat_score,
 )
-from backend.at_service import AfricasTalkingService, SERVER_BASE_URL
+from backend.at_service import AfricasTalkingService
 from backend.websocket_manager import ws_manager
 
 logging.basicConfig(
@@ -89,12 +91,6 @@ app.add_middleware(
 class SimulateSmsRequest(BaseModel):
     sender_phone: str = Field(..., example="+254718442412")
     text: str = Field(..., example="Dear Parent, pay KES 14,500 Term 3 fees to Paybill 522123 Acc 0178 MARANDA.")
-
-
-class PosInitiateRequest(BaseModel):
-    merchant_id: str = Field(default="MERCHANT-NAIROBI-HQ", example="MERCHANT-01")
-    customer_phone: str = Field(..., example="+254712345678")
-    amount: float = Field(..., gt=0, example=1500.0)
 
 
 class TelemetryPingRequest(BaseModel):
@@ -250,141 +246,253 @@ async def webhook_at_incoming_sms(
 @app.post("/api/webhooks/at/voice-callback")
 async def webhook_at_voice_callback(request: Request):
     """
-    Africa's Talking Outbound Voice Callback.
-    Invoked when customer answers the Zero-Trust verification call.
-    Returns XML with <GetDigits> prompting for keypress.
+    Africa's Talking outbound voice callback.
+    Invoked when the recipient answers a scam-warning call.
+    Returns Voice XML that plays the Swahili warning.
     """
     form_data = await request.form()
     logger.info("AT Voice Callback received: %s", dict(form_data))
 
-    callback_url = f"{SERVER_BASE_URL.rstrip('/')}/api/webhooks/at/voice-dtmf"
-    xml_content = AfricasTalkingService.build_pos_ivr_xml(
-        amount=1500.0,
-        merchant_name="Nairobi SecOps Merchant",
-        callback_url=callback_url,
-    )
+    is_active = str(form_data.get("isActive", "1"))
+    if is_active == "0":
+        return Response(content="", status_code=200)
+
+    spoken = AfricasTalkingService.pop_pending_voice([
+        str(form_data.get("callerNumber", "")),
+        str(form_data.get("destinationNumber", "")),
+        str(form_data.get("clientDialedNumber", "")),
+    ])
+    if spoken:
+        return Response(
+            content=AfricasTalkingService.build_say_xml(spoken),
+            media_type="application/xml",
+        )
+
+    paybill = str(form_data.get("clientRequestId", "") or "522123")
+    xml_content = AfricasTalkingService.build_swahili_warning_xml(paybill=paybill)
     return Response(content=xml_content, media_type="application/xml")
 
 
-@app.post("/api/webhooks/at/voice-dtmf")
-async def webhook_at_voice_dtmf(
-    request: Request,
+def _hash_code(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+class SimSwapStartRequest(BaseModel):
+    phone: str = Field(..., example="+254712345678")
+    channel: str = Field(default="sms", example="sms")
+    consent: bool = False
+
+
+class SimSwapKycRequest(BaseModel):
+    request_id: str
+    id_photo: str
+    selfie: str
+    liveness_code: str
+
+
+class SimSwapConfirmRequest(BaseModel):
+    request_id: str
+    code: str
+
+
+@app.post("/api/sim-swap/start")
+async def start_sim_swap(
+    payload: SimSwapStartRequest,
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Africa's Talking Voice DTMF Capture Webhook.
-    Invoked when customer enters keypad digit (e.g., '1' to confirm).
+    Start a simulated SIM swap. Africa's Talking reports whether the SIM
+    was already swapped. The telco still performs any real swap.
     """
-    form_data = await request.form()
-    digits = str(form_data.get("dtmfDigits", form_data.get("digits", ""))).strip()
-    session_id = str(form_data.get("sessionId", ""))
-    caller = str(form_data.get("callerNumber", "+254712000000"))
+    if not payload.consent:
+        raise HTTPException(status_code=400, detail="Consent is required before the camera opens.")
 
-    logger.info("Captured DTMF digit '%s' for session %s", digits, session_id)
+    phone = payload.phone.strip().replace(" ", "")
+    if not phone.startswith("+") or not phone[1:].isdigit() or len(phone) < 10:
+        raise HTTPException(status_code=400, detail="Use the full phone number, starting with +254.")
 
-    if digits == "1":
-        # Generate truncated cryptographic zero-trust auth token
-        auth_token = f"#AT-{uuid.uuid4().hex[:5].upper()}"
+    channel = payload.channel.lower()
+    if channel not in {"sms", "call", "whatsapp"}:
+        raise HTTPException(status_code=400, detail="Channel must be sms, call, or whatsapp.")
 
-        # Fetch latest pending transaction
-        stmt = (
-            select(PosTransaction)
-            .where(PosTransaction.status == PosTransactionStatus.PENDING)
-            .order_by(desc(PosTransaction.created_at))
-            .limit(1)
+    check = await AfricasTalkingService.check_sim_swap(phone)
+    liveness_code = f"{secrets.randbelow(10000):04d}"
+    request_row = SimSwapRequest(
+        phone=phone,
+        channel=channel,
+        swap_check_status=check.get("status", "Failed"),
+        risk_level=check.get("risk_level", "UNKNOWN"),
+        kyc_status="PENDING",
+        status=SimSwapStatus.PENDING,
+        liveness_code_hash=_hash_code(liveness_code),
+        created_at=datetime.utcnow(),
+    )
+    db.add(request_row)
+    await db.commit()
+    await db.refresh(request_row)
+
+    db.add(AuditLog(
+        actor=phone,
+        action="SIM_SWAP_STARTED",
+        entity="sim_swap_requests",
+        entity_id=str(request_row.id),
+        meta={"swap_check_status": request_row.swap_check_status, "risk_level": request_row.risk_level},
+        created_at=datetime.utcnow(),
+    ))
+    await db.commit()
+
+    return {
+        "request_id": str(request_row.id),
+        "phone": phone,
+        "channel": channel,
+        "swap_check_status": request_row.swap_check_status,
+        "risk_level": request_row.risk_level,
+        "liveness_challenge": liveness_code,
+        "check_mode": check.get("mode"),
+        "note": "This does not swap the SIM. Only the mobile network can do that.",
+    }
+
+
+@app.post("/api/sim-swap/kyc")
+async def submit_sim_swap_kyc(
+    payload: SimSwapKycRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Compare the ID photo and live selfie. Images are discarded after scoring."""
+    try:
+        request_uuid = uuid.UUID(payload.request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Unknown request.") from exc
+
+    result = await db.execute(select(SimSwapRequest).where(SimSwapRequest.id == request_uuid))
+    request_row = result.scalars().first()
+    if request_row is None:
+        raise HTTPException(status_code=404, detail="SIM swap request not found.")
+    if request_row.status not in {SimSwapStatus.PENDING, SimSwapStatus.KYC_PASSED}:
+        raise HTTPException(status_code=400, detail="This request is no longer waiting for a face check.")
+
+    typed = payload.liveness_code.strip()
+    liveness_passed = bool(request_row.liveness_code_hash) and _hash_code(typed) == request_row.liveness_code_hash
+    if not liveness_passed:
+        db.add(KycAttempt(
+            request_id=request_row.id,
+            similarity_score=0,
+            liveness_passed=False,
+            result="FAILED",
+            created_at=datetime.utcnow(),
+        ))
+        await db.commit()
+        raise HTTPException(status_code=400, detail="The 4-digit challenge does not match. Read the number on the screen.")
+
+    try:
+        score, reason = compare_faces(payload.id_photo, payload.selfie)
+    except FaceMatchError as exc:
+        db.add(KycAttempt(
+            request_id=request_row.id,
+            similarity_score=0,
+            liveness_passed=True,
+            result="FAILED",
+            created_at=datetime.utcnow(),
+        ))
+        await db.commit()
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    finally:
+        payload.id_photo = ""
+        payload.selfie = ""
+
+    passed = score >= FACE_PASS_SCORE
+    db.add(KycAttempt(
+        request_id=request_row.id,
+        similarity_score=score,
+        liveness_passed=True,
+        result="PASSED" if passed else "FAILED",
+        created_at=datetime.utcnow(),
+    ))
+
+    if not passed:
+        request_row.kyc_status = "FAILED"
+        await db.commit()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Face match score {score} is below {FACE_PASS_SCORE}. {reason}",
         )
-        res = await db.execute(stmt)
-        tx = res.scalars().first()
 
-        if tx:
-            tx.status = PosTransactionStatus.AUTHENTICATED
-            tx.auth_token = auth_token
-            await db.commit()
-            await db.refresh(tx)
-            amount = float(tx.amount)
-        else:
-            amount = 1500.0
+    code = f"{secrets.randbelow(1000000):06d}"
+    request_row.kyc_status = "PASSED"
+    request_row.status = SimSwapStatus.CODE_SENT
+    request_row.liveness_code_hash = None
+    request_row.confirm_code_hash = _hash_code(code)
+    request_row.confirm_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    dispatch = await AfricasTalkingService.send_confirmation(
+        request_row.phone, request_row.channel, code
+    )
+    db.add(AuditLog(
+        actor=request_row.phone,
+        action="KYC_PASSED",
+        entity="sim_swap_requests",
+        entity_id=str(request_row.id),
+        meta={"similarity_score": score, "channel": request_row.channel},
+        created_at=datetime.utcnow(),
+    ))
+    await db.commit()
 
-        # Dual receipt SMS dispatch
-        receipt_text = (
-            f"[Chapaa-Verify] AUTHENTICATED: Payment of KES {int(amount)} confirmed with token {auth_token}. "
-            f"Zero-Trust handshake successful."
-        )
-        await AfricasTalkingService.send_sms(caller, receipt_text)
+    body: Dict[str, Any] = {
+        "request_id": str(request_row.id),
+        "kyc_status": "PASSED",
+        "similarity_score": score,
+        "channel": request_row.channel,
+        "dispatch_mode": dispatch.get("mode"),
+    }
+    if dispatch.get("mode") != "live":
+        body["sandbox_code"] = code
+    return body
 
-        # Broadcast instant screen transition to green
-        await ws_manager.broadcast_pos_verified({
-            "status": "AUTHENTICATED",
-            "auth_token": auth_token,
-            "digit_captured": "1",
-            "amount": amount,
-            "customer_phone": caller,
-            "timestamp": datetime.utcnow().isoformat(),
-        })
 
-        xml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="woman">Transaction confirmed with authorization token {auth_token}. Thank you.</Say>
-</Response>"""
-        return Response(content=xml_response, media_type="application/xml")
+@app.post("/api/sim-swap/confirm")
+async def confirm_sim_swap(
+    payload: SimSwapConfirmRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Check the one-time code and mark the simulated swap completed."""
+    try:
+        request_uuid = uuid.UUID(payload.request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Unknown request.") from exc
 
-    # If cancelled or other digit pressed
-    xml_cancel = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Say voice="woman">Payment rejected. No funds were debited.</Say>
-</Response>"""
-    return Response(content=xml_cancel, media_type="application/xml")
+    result = await db.execute(select(SimSwapRequest).where(SimSwapRequest.id == request_uuid))
+    request_row = result.scalars().first()
+    if request_row is None:
+        raise HTTPException(status_code=404, detail="SIM swap request not found.")
+    if request_row.status != SimSwapStatus.CODE_SENT or not request_row.confirm_code_hash:
+        raise HTTPException(status_code=400, detail="Enter the face check before the confirmation code.")
+    if request_row.confirm_expires_at and request_row.confirm_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="That code has expired. Start again.")
+    if _hash_code(payload.code.strip()) != request_row.confirm_code_hash:
+        raise HTTPException(status_code=400, detail="That code is wrong.")
+
+    request_row.status = SimSwapStatus.COMPLETED
+    request_row.confirm_code_hash = None
+    request_row.completed_at = datetime.utcnow()
+    db.add(AuditLog(
+        actor=request_row.phone,
+        action="SIM_SWAP_COMPLETED",
+        entity="sim_swap_requests",
+        entity_id=str(request_row.id),
+        meta={"simulated": True, "risk_level": request_row.risk_level},
+        created_at=datetime.utcnow(),
+    ))
+    await db.commit()
+    return {
+        "request_id": str(request_row.id),
+        "status": "COMPLETED",
+        "simulated": True,
+        "message": "Recorded in the audit log. The mobile network was not asked to swap this SIM.",
+    }
 
 
 # ==============================================================================
 # SEC-OPS REST ENDPOINTS
 # ==============================================================================
-
-@app.post("/api/verify/initiate")
-async def initiate_pos_verification(
-    payload: PosInitiateRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Merchant initiates zero-trust transaction on the dashboard.
-    Triggers outbound Africa's Talking Voice IVR call.
-    """
-    tx = PosTransaction(
-        merchant_id=payload.merchant_id,
-        customer_phone=payload.customer_phone,
-        amount=payload.amount,
-        status=PosTransactionStatus.PENDING,
-        created_at=datetime.utcnow(),
-    )
-    db.add(tx)
-    await db.commit()
-    await db.refresh(tx)
-
-    # Trigger Outbound AT Voice Call
-    call_result = await AfricasTalkingService.trigger_pos_handshake_call(
-        customer_phone=payload.customer_phone,
-        amount=payload.amount,
-        merchant_name=payload.merchant_id,
-    )
-
-    # Broadcast calling state
-    await ws_manager.broadcast_pos_state_changed({
-        "status": "CALLING",
-        "tx_id": str(tx.id),
-        "amount": payload.amount,
-        "customer_phone": payload.customer_phone,
-        "message": "Awaiting Customer DTMF Keypad Input (Press 1)",
-    })
-
-    return {
-        "success": True,
-        "transaction_id": str(tx.id),
-        "status": "CALLING",
-        "customer_phone": payload.customer_phone,
-        "amount": payload.amount,
-        "call_result": call_result,
-    }
-
 
 @app.post("/api/canary/simulate-sms")
 async def simulate_sms_attack(
@@ -548,15 +656,11 @@ async def get_kpi_stats(db: AsyncSession = Depends(get_db)):
     school_scams = await db.scalar(
         select(func.count(ThreatLog.id)).where(ThreatLog.category == ThreatCategory.SCHOOL_FEE)
     ) or 112
-    pos_verified = await db.scalar(
-        select(func.count(PosTransaction.id)).where(PosTransaction.status == PosTransactionStatus.AUTHENTICATED)
-    ) or 342
     pings = await db.scalar(select(func.count(QoSTelemetry.id))) or 1892
 
     return {
         "scams_intercepted": threats_count,
         "school_fee_fraud_blocked": school_scams,
-        "pos_handshakes": pos_verified,
         "device_pings": pings,
         "live_canaries": 2,
     }

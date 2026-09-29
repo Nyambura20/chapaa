@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import dynamic from 'next/dynamic';
 import {
   Radio,
   Wifi,
@@ -12,8 +13,17 @@ import {
   Clock,
   ShieldCheck,
 } from 'lucide-react';
-import { KenyaLeafletMap } from '../components/KenyaLeafletMap';
 import { ProbeDevice } from '../types';
+
+const KenyaLeafletMap = dynamic(
+  () => import('../components/KenyaLeafletMap').then((mod) => mod.KenyaLeafletMap),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="w-full rounded-xl bg-slate-100 border border-slate-200 animate-pulse" style={{ height: '480px' }} />
+    ),
+  }
+);
 
 interface QosViewProps {
   probes: ProbeDevice[];

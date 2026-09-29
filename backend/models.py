@@ -1,6 +1,6 @@
 """
 SQLAlchemy Async Database Models for CHAPAA-GUARD.
-Includes Verified Entities, Blacklist Entities, Threat Logs, POS Transactions, and QoS Telemetry.
+Includes Verified Entities, Blacklist Entities, Threat Logs, QoS Telemetry, and SIM swap requests.
 """
 
 import enum
@@ -10,7 +10,6 @@ from sqlalchemy import (
     Column,
     String,
     Integer,
-    Numeric,
     Boolean,
     Text,
     DateTime,
@@ -35,12 +34,6 @@ class ThreatCategory(str, enum.Enum):
     LOAN_SCAM = "LOAN_SCAM"
     FAKE_REVERSAL = "FAKE_REVERSAL"
     SAFE = "SAFE"
-
-
-class PosTransactionStatus(str, enum.Enum):
-    PENDING = "PENDING"
-    AUTHENTICATED = "AUTHENTICATED"
-    REJECTED = "REJECTED"
 
 
 class VerifiedEntity(Base):
@@ -101,21 +94,6 @@ class ThreatLog(Base):
     )
 
 
-class PosTransaction(Base):
-    """
-    Merchant POS zero-trust transactions requiring out-of-band IVR/DTMF customer verification.
-    """
-    __tablename__ = "pos_transactions"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    merchant_id = Column(String(100), nullable=False, index=True)
-    customer_phone = Column(String(50), nullable=False, index=True)
-    amount = Column(Numeric(12, 2), nullable=False)
-    auth_token = Column(String(50), nullable=True, unique=True, index=True)
-    status = Column(SQLEnum(PosTransactionStatus), nullable=False, default=PosTransactionStatus.PENDING)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-
 class QoSTelemetry(Base):
     """
     Continuous hardware telemetry sent by field sentinel Android probes
@@ -129,3 +107,56 @@ class QoSTelemetry(Base):
     signal_dbm = Column(Integer, nullable=False)
     ping_latency_ms = Column(Integer, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class SimSwapStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    KYC_PASSED = "KYC_PASSED"
+    CODE_SENT = "CODE_SENT"
+    COMPLETED = "COMPLETED"
+    REJECTED = "REJECTED"
+
+
+class SimSwapRequest(Base):
+    """
+    Simulated SIM replacement. Only the telco can swap a SIM.
+    This row records the check, the face-match result, and the confirmation code.
+    """
+    __tablename__ = "sim_swap_requests"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    phone = Column(String(50), nullable=False, index=True)
+    channel = Column(String(20), nullable=False, default="sms")
+    swap_check_status = Column(String(40), nullable=False, default="UNKNOWN")
+    risk_level = Column(String(20), nullable=False, default="UNKNOWN")
+    kyc_status = Column(String(20), nullable=False, default="PENDING")
+    status = Column(SQLEnum(SimSwapStatus), nullable=False, default=SimSwapStatus.PENDING)
+    liveness_code_hash = Column(String(128), nullable=True)
+    confirm_code_hash = Column(String(128), nullable=True)
+    confirm_expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class KycAttempt(Base):
+    """Face-match result only. Photos are never stored."""
+    __tablename__ = "kyc_attempts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    request_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    similarity_score = Column(Integer, nullable=False, default=0)
+    liveness_passed = Column(Boolean, nullable=False, default=False)
+    result = Column(String(20), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor = Column(String(50), nullable=False)
+    action = Column(String(80), nullable=False)
+    entity = Column(String(80), nullable=False)
+    entity_id = Column(String(64), nullable=False)
+    meta = Column(JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

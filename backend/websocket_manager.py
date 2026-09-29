@@ -1,6 +1,6 @@
 """
 WebSocket connection manager for CHAPAA-GUARD real-time SecOps event stream.
-Broadcasts live smishing alerts, POS DTMF state transitions, and QoS sentinel telemetry.
+Broadcasts live smishing alerts and QoS sentinel telemetry.
 """
 
 import json
@@ -54,14 +54,6 @@ class WebSocketManager:
     async def broadcast_threat_intercepted(self, threat_data: Dict[str, Any]):
         """Triggered when an incoming SMS triggers Chapaa-Scan fraud heuristics."""
         await self.broadcast("THREAT_INTERCEPTED", threat_data)
-
-    async def broadcast_pos_verified(self, pos_data: Dict[str, Any]):
-        """Triggered when a merchant POS zero-trust handshake captures DTMF '1'."""
-        await self.broadcast("TRANSACTION_VERIFIED", pos_data)
-
-    async def broadcast_pos_state_changed(self, pos_data: Dict[str, Any]):
-        """Triggered when transaction initiates, rings, or awaits customer PIN/keypad."""
-        await self.broadcast("TRANSACTION_STATE_CHANGE", pos_data)
 
     async def broadcast_qos_telemetry(self, telemetry_data: Dict[str, Any]):
         """Triggered when Android hardware probes (Infinix, Samsung) ping signal stats."""

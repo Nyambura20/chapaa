@@ -1,27 +1,10 @@
 import { SWAHILI_AUDIO_BASE64 } from './swahiliAudioBase64';
 
 /**
- * Audio synthesis utilities for CHAPAA-GUARD:
- * - Authentic Dual-Tone Multi-Frequency (DTMF) keypad generator
- * - Authentic Kenyan Swahili Voice / Audio player
+ * Audio utilities for CHAPAA-GUARD:
+ * - Kenyan Swahili voice / audio player
  * - Alert sound FX
  */
-
-// Standard ITU-T Q.23 DTMF Frequencies (Hz)
-const DTMF_FREQS: Record<string, [number, number]> = {
-  '1': [697, 1209],
-  '2': [697, 1336],
-  '3': [697, 1477],
-  '4': [770, 1209],
-  '5': [770, 1336],
-  '6': [770, 1477],
-  '7': [852, 1209],
-  '8': [852, 1336],
-  '9': [852, 1477],
-  '*': [941, 1209],
-  '0': [941, 1336],
-  '#': [941, 1477],
-};
 
 let audioCtx: AudioContext | null = null;
 
@@ -37,42 +20,6 @@ function getAudioContext(): AudioContext | null {
     audioCtx.resume();
   }
   return audioCtx;
-}
-
-export function playDtmfTone(digit: string, durationMs = 180) {
-  try {
-    const ctx = getAudioContext();
-    if (!ctx) return;
-
-    const freqs = DTMF_FREQS[digit];
-    if (!freqs) return;
-
-    const now = ctx.currentTime;
-    const osc1 = ctx.createOscillator();
-    const osc2 = ctx.createOscillator();
-    const gainNode = ctx.createGain();
-
-    osc1.type = 'sine';
-    osc2.type = 'sine';
-    osc1.frequency.setValueAtTime(freqs[0], now);
-    osc2.frequency.setValueAtTime(freqs[1], now);
-
-    // Envelope
-    gainNode.gain.setValueAtTime(0.01, now);
-    gainNode.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, now + durationMs / 1000);
-
-    osc1.connect(gainNode);
-    osc2.connect(gainNode);
-    gainNode.connect(ctx.destination);
-
-    osc1.start(now);
-    osc2.start(now);
-    osc1.stop(now + durationMs / 1000);
-    osc2.stop(now + durationMs / 1000);
-  } catch (err) {
-    console.warn('Audio tone play prevented:', err);
-  }
 }
 
 export function playAlertChime() {

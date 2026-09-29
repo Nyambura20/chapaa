@@ -14,8 +14,6 @@ from backend.models import (
     EntityType,
     ThreatLog,
     ThreatCategory,
-    PosTransaction,
-    PosTransactionStatus,
     QoSTelemetry,
 )
 

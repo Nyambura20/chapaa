@@ -3,13 +3,12 @@ import {
   Shield,
   Radio,
   MessageSquareWarning,
-  CreditCard,
   Smartphone,
   Settings,
-  ChevronRight,
+  ScanFace,
 } from 'lucide-react';
 
-export type NavView = 'dashboard' | 'qos' | 'threats' | 'pos' | 'canaries' | 'settings';
+export type NavView = 'dashboard' | 'qos' | 'threats' | 'canaries' | 'sim-swap' | 'settings';
 
 interface SidebarNavProps {
   activeTab: NavView;
@@ -45,15 +44,15 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
       badge: threatCount > 0 ? threatCount : undefined,
     },
     {
-      id: 'pos',
-      icon: CreditCard,
-      label: 'Merchant POS',
-    },
-    {
       id: 'canaries',
       icon: Smartphone,
       label: 'Live Canaries',
       badge: '2 Active',
+    },
+    {
+      id: 'sim-swap',
+      icon: ScanFace,
+      label: 'SIM Swap',
     },
     {
       id: 'settings',
@@ -114,7 +113,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
           <span>AT Gateway 20880</span>
         </div>
-        <span className="text-[10px] text-slate-400">Zero-Trust &middot; 4G/LTE Canaries</span>
+        <span className="text-[10px] text-slate-400">SMS &amp; Voice &middot; 4G/LTE Canaries</span>
       </div>
     </aside>
   );

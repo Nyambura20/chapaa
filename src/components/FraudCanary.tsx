@@ -4,37 +4,18 @@ import {
   PhoneCall,
   Send,
   CheckCircle2,
-  Clock,
-  KeyRound,
-  RotateCcw,
   Sparkles,
-  Volume2,
 } from 'lucide-react';
-import { PosStatus } from '../types';
 import { speakSwahiliWarning, playAlertChime } from '../utils/audio';
 
 interface FraudCanaryProps {
   onTriggerAttack: (text: string, phone: string) => Promise<any>;
-  onTriggerPosVerify: (amount: number, phone: string) => Promise<any>;
   onSimulateVoiceCall: (phone: string, paybill?: string) => Promise<any>;
-  posStatus: PosStatus;
-  authToken: string | null;
-  posAmount: number;
-  posPhone: string;
-  onSetPosAmount: (val: number) => void;
-  onSetPosPhone: (val: string) => void;
 }
 
 export const FraudCanary: React.FC<FraudCanaryProps> = ({
   onTriggerAttack,
-  onTriggerPosVerify,
   onSimulateVoiceCall,
-  posStatus,
-  authToken,
-  posAmount,
-  posPhone,
-  onSetPosAmount,
-  onSetPosPhone,
 }) => {
   // Pre-configured attack templates
   const templates = [
@@ -180,111 +161,8 @@ export const FraudCanary: React.FC<FraudCanaryProps> = ({
           <p className="text-slate-300 text-[10px] pl-5">
             {isVoicePlaying
               ? '▶ Playing Swahili TTS: "Onyo la Utapeli kutoka Chapaa Guard..."'
-              : 'DTMF captured via AT Voice API &bull; Authorizing Transaction #AT-98214'}
+              : 'Ready to place a Swahili warning call via Africa\'s Talking Voice'}
           </p>
-        </div>
-      </div>
-
-      {/* 2. Chapaa-Verify Merchant Terminal */}
-      <div className="rounded-xl bg-slate-900 border border-slate-800 p-3.5 shadow-lg flex flex-col gap-3">
-        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-          <div className="flex items-center gap-2">
-            <KeyRound className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-xs font-bold text-slate-100 uppercase tracking-wider font-mono">
-              Chapaa-Verify Merchant Terminal
-            </h3>
-          </div>
-          {/* Dynamic Status Pill matching mockup */}
-          <div>
-            {posStatus === 'AUTHENTICATED' ? (
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500 font-bold flex items-center gap-1 animate-pulse">
-                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                AUTHENTICATED {authToken || '#AT-98214'}
-              </span>
-            ) : posStatus === 'CALLING' ? (
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-950 text-amber-300 border border-amber-500 font-bold flex items-center gap-1 animate-pulse">
-                <Clock className="w-3 h-3 text-amber-400" />
-                Awaiting DTMF (CALLING)
-              </span>
-            ) : (
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                Terminal Idle
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Inputs */}
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-[10px] font-mono text-slate-400 block mb-1">
-              Transaction Amount
-            </label>
-            <div className="relative">
-              <span className="absolute left-2.5 top-2 text-xs font-mono text-slate-400">KES</span>
-              <input
-                type="number"
-                value={posAmount}
-                onChange={(e) => onSetPosAmount(Number(e.target.value))}
-                className="w-full pl-12 pr-2 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono font-bold text-slate-100 focus:outline-hidden focus:border-emerald-500"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="text-[10px] font-mono text-slate-400 block mb-1">
-              Customer Phone
-            </label>
-            <input
-              type="text"
-              value={posPhone}
-              onChange={(e) => onSetPosPhone(e.target.value)}
-              className="w-full px-2 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-slate-100 focus:outline-hidden focus:border-emerald-500"
-            />
-          </div>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => onTriggerPosVerify(posAmount, posPhone)}
-            className="flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-mono text-[11px] font-bold transition shadow cursor-pointer"
-          >
-            <RotateCcw className="w-3 h-3" />
-            <span>Resend USSD Push</span>
-          </button>
-          <button
-            onClick={() => onTriggerPosVerify(posAmount, posPhone)}
-            className="flex items-center justify-center gap-1.5 py-2 px-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-[11px] font-bold transition shadow cursor-pointer"
-          >
-            <PhoneCall className="w-3 h-3" />
-            <span>Force Voice IVR Call</span>
-          </button>
-        </div>
-
-        {/* Status indicator message */}
-        <div className={`p-2.5 rounded-lg border text-xs font-mono flex items-center justify-between transition-all ${
-          posStatus === 'AUTHENTICATED'
-            ? 'bg-emerald-950/80 border-emerald-500/80 text-emerald-200'
-            : posStatus === 'CALLING'
-            ? 'bg-sky-950/60 border-sky-600 text-sky-200'
-            : 'bg-slate-950 border-slate-800 text-slate-400'
-        }`}>
-          <div className="flex items-center gap-2">
-            <span className={`w-2.5 h-2.5 rounded-full ${
-              posStatus === 'AUTHENTICATED'
-                ? 'bg-emerald-400'
-                : posStatus === 'CALLING'
-                ? 'bg-sky-400 animate-ping'
-                : 'bg-slate-500'
-            }`}></span>
-            <span>
-              {posStatus === 'AUTHENTICATED'
-                ? `AUTHENTICATED ${authToken || '#AT-98214'} &bull; Receipt Sent via AT SMS`
-                : posStatus === 'CALLING'
-                ? 'Awaiting Customer DTMF Keypad Input (Press 1)...'
-                : 'Awaiting Merchant or Customer Input'}
-            </span>
-          </div>
         </div>
       </div>
     </div>

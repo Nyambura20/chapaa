@@ -2,21 +2,16 @@ import React, { useState } from 'react';
 import {
   ShieldAlert,
   GraduationCap,
-  CreditCard,
   Radio,
   TrendingUp,
   MessageSquareWarning,
   Sparkles,
   Send,
-  PhoneCall,
   CheckCircle2,
-  KeyRound,
-  RotateCcw,
   ArrowRight,
-  Clock,
   Volume2,
 } from 'lucide-react';
-import { ThreatLogItem, KpiMetrics, PosStatus } from '../types';
+import { ThreatLogItem, KpiMetrics } from '../types';
 import { playAuthenticSwahiliWarning, playAlertChime } from '../utils/audio';
 
 interface DashboardOverviewProps {
@@ -24,14 +19,6 @@ interface DashboardOverviewProps {
   threats: ThreatLogItem[];
   onSelectThreat: (threat: ThreatLogItem) => void;
   onTriggerAttack: (text: string, phone: string) => Promise<any>;
-  onTriggerPosVerify: (amount: number, phone: string) => Promise<any>;
-  posStatus: PosStatus;
-  authToken: string | null;
-  posAmount: number;
-  posPhone: string;
-  onSetPosAmount: (val: number) => void;
-  onSetPosPhone: (val: string) => void;
-  onOpenDtmfModal: () => void;
   onNavigateToView: (view: string) => void;
 }
 
@@ -40,19 +27,8 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   threats,
   onSelectThreat,
   onTriggerAttack,
-  onTriggerPosVerify,
-  posStatus,
-  authToken,
-  posAmount,
-  posPhone,
-  onSetPosAmount,
-  onSetPosPhone,
-  onOpenDtmfModal,
   onNavigateToView,
 }) => {
-  // Simulator Tab: 'attack' | 'pos'
-  const [simulatorTab, setSimulatorTab] = useState<'attack' | 'pos'>('attack');
-
   // Attack Templates
   const templates = [
     {
@@ -118,7 +94,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
   return (
     <div className="flex flex-col gap-5">
       {/* 1. TOP 4 HIGH-LEVEL KPI CARDS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
         {/* Card 1: Intercepted Smishing (Rose) */}
         <div className="p-4 rounded-xl bg-white border border-slate-200/90 shadow-xs hover:shadow-sm flex items-center justify-between group transition">
           <div>
@@ -165,30 +141,7 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           </div>
         </div>
 
-        {/* Card 3: POS Verifications (Emerald) */}
-        <div className="p-4 rounded-xl bg-white border border-slate-200/90 shadow-xs hover:shadow-sm flex items-center justify-between group transition">
-          <div>
-            <span className="text-xs font-mono font-medium text-slate-500 block">
-              POS Verifications
-            </span>
-            <div className="flex items-baseline gap-2 mt-1">
-              <span className="text-2xl font-bold font-mono text-slate-900">
-                {metrics.posHandshakes}
-              </span>
-              <span className="text-xs font-mono font-semibold text-emerald-600">
-                100% Zero-Trust
-              </span>
-            </div>
-            <span className="text-[10px] text-slate-400 font-mono mt-1 block">
-              Out-of-band IVR / USSD
-            </span>
-          </div>
-          <div className="p-3 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
-            <CreditCard className="w-6 h-6" />
-          </div>
-        </div>
-
-        {/* Card 4: Telemetry Probes Online (Sky) */}
+        {/* Card 3: Telemetry Probes Online (Sky) */}
         <div className="p-4 rounded-xl bg-white border border-slate-200/90 shadow-xs hover:shadow-sm flex items-center justify-between group transition">
           <div>
             <span className="text-xs font-mono font-medium text-slate-500 block">
@@ -311,34 +264,9 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                 Quick Demo Simulator
               </h3>
             </div>
-            {/* Toggle Tabs */}
-            <div className="flex p-0.5 rounded-lg bg-slate-100 border border-slate-200">
-              <button
-                onClick={() => setSimulatorTab('attack')}
-                className={`px-3 py-1 rounded-md text-xs font-mono font-medium transition cursor-pointer ${
-                  simulatorTab === 'attack'
-                    ? 'bg-rose-600 text-white font-bold shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Smishing Attack
-              </button>
-              <button
-                onClick={() => setSimulatorTab('pos')}
-                className={`px-3 py-1 rounded-md text-xs font-mono font-medium transition cursor-pointer ${
-                  simulatorTab === 'pos'
-                    ? 'bg-emerald-600 text-white font-bold shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Merchant POS
-              </button>
-            </div>
           </div>
 
-          {/* TAB A: SMISHING ATTACK SIMULATOR */}
-          {simulatorTab === 'attack' ? (
-            <div className="flex flex-col gap-2.5 font-mono">
+          <div className="flex flex-col gap-2.5 font-mono">
               <div className="text-xs text-slate-600 font-sans">
                 Select a simulated attack or enter customized scam SMS text:
               </div>
@@ -427,88 +355,6 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
                 </div>
               )}
             </div>
-          ) : (
-            /* TAB B: MERCHANT POS SIMULATOR */
-            <div className="flex flex-col gap-3.5 font-mono">
-              <div className="text-xs text-slate-600">
-                Trigger an out-of-band Zero-Trust authorization challenge to customer phone:
-              </div>
-
-              {/* Inputs */}
-              <div className="grid grid-cols-2 gap-2.5">
-                <div>
-                  <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-1">
-                    Amount (KES)
-                  </label>
-                  <input
-                    type="number"
-                    value={posAmount}
-                    onChange={(e) => onSetPosAmount(Number(e.target.value))}
-                    className="w-full px-2.5 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs font-bold text-slate-900 focus:outline-hidden focus:border-emerald-500 focus:bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] text-slate-500 uppercase font-semibold block mb-1">
-                    Customer MSISDN
-                  </label>
-                  <input
-                    type="text"
-                    value={posPhone}
-                    onChange={(e) => onSetPosPhone(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-900 focus:outline-hidden focus:border-emerald-500 focus:bg-white"
-                  />
-                </div>
-              </div>
-
-              {/* Primary Action Button */}
-              <button
-                onClick={() => onTriggerPosVerify(posAmount, posPhone)}
-                className="w-full py-2.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
-              >
-                <KeyRound className="w-4 h-4" />
-                <span>Send Verification Challenge (Voice/USSD)</span>
-              </button>
-
-              {/* Status Banner */}
-              <div
-                className={`p-3 rounded-xl border text-xs flex items-center justify-between transition ${
-                  posStatus === 'AUTHENTICATED'
-                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900 font-semibold'
-                    : posStatus === 'CALLING'
-                    ? 'bg-sky-50 border-sky-300 text-sky-900'
-                    : 'bg-slate-50 border-slate-200 text-slate-600'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`w-2.5 h-2.5 rounded-full ${
-                      posStatus === 'AUTHENTICATED'
-                        ? 'bg-emerald-500'
-                        : posStatus === 'CALLING'
-                        ? 'bg-sky-500 animate-ping'
-                        : 'bg-slate-400'
-                    }`}
-                  ></span>
-                  <span>
-                    {posStatus === 'AUTHENTICATED'
-                      ? `AUTHENTICATED: ${authToken || '#AT-98214'}`
-                      : posStatus === 'CALLING'
-                      ? 'Calling customer phone... Awaiting keypress 1'
-                      : 'Terminal Ready'}
-                  </span>
-                </div>
-
-                {posStatus === 'CALLING' && (
-                  <button
-                    onClick={onOpenDtmfModal}
-                    className="px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white text-[10px] font-bold transition cursor-pointer shadow-xs"
-                  >
-                    Open Dial Pad
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

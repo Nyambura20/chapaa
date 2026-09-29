@@ -10,17 +10,15 @@ import { SidebarNav, NavView } from './components/SidebarNav';
 import { DashboardOverview } from './views/DashboardOverview';
 import { QosView } from './views/QosView';
 import { ThreatStreamView } from './views/ThreatStreamView';
-import { MerchantPosView } from './views/MerchantPosView';
 import { CanariesView } from './views/CanariesView';
 import { SettingsView } from './views/SettingsView';
+import { SimSwapView } from './views/SimSwapView';
 import { ScamTriageDrawer } from './components/ScamTriageDrawer';
-import { DtmfModal } from './components/DtmfModal';
 import { AtPayloadInspector } from './components/AtPayloadInspector';
 import {
   ThreatLogItem,
   ProbeDevice,
   KpiMetrics,
-  PosStatus,
   AtWebhookLog,
 } from './types';
 import { playAlertChime, speakSwahiliWarning } from './utils/audio';
@@ -29,7 +27,6 @@ const INITIAL_KPI: KpiMetrics = {
   scamsIntercepted: 39,
   scamsTrend: '+14%',
   schoolFeeBlocked: 112,
-  posHandshakes: 342,
   devicePings: 1892,
   liveCanaries: 2,
 };
@@ -158,25 +155,11 @@ const INITIAL_AT_LOGS: AtWebhookLog[] = [
     direction: 'OUTBOUND',
     status: 200,
     contentType: 'application/xml',
-    description: "AT Voice XML <GetDigits> generated for POS Zero-Trust IVR Handshake",
+    description: "AT Voice XML <Play> for the Swahili scam warning",
     payload: `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <GetDigits callbackUrl="https://api.chapaa-guard.ke/api/webhooks/at/voice-dtmf" finishOnKey="#" timeout="15" numDigits="1">
-    <Say voice="woman">Authorize payment of KES 1500 at MERCHANT-NAIROBI-HQ. Dial 1 to confirm or 0 to cancel.</Say>
-  </GetDigits>
-  <Say voice="woman">We did not receive your input. Transaction cancelled.</Say>
+  <Play url="https://raw.githubusercontent.com/africastalking/voice-samples/master/swahili_fraud_warning.mp3"/>
 </Response>`,
-  },
-  {
-    id: 'log-3',
-    timestamp: new Date().toISOString(),
-    endpoint: '/api/webhooks/at/voice-dtmf',
-    method: 'POST',
-    direction: 'INBOUND',
-    status: 200,
-    contentType: 'application/x-www-form-urlencoded',
-    description: "AT Captured DTMF Keypress '1' from Customer Device",
-    payload: `callerNumber=%2B254712345678&dtmfDigits=1&sessionId=ATVoiceSession_839281&callStartTime=2026-09-28+12%3A41%3A05&durationInSeconds=8`,
   },
 ];
 
@@ -187,41 +170,6 @@ export default function App() {
   const [threats, setThreats] = useState<ThreatLogItem[]>(INITIAL_THREATS);
   const [selectedThreat, setSelectedThreat] = useState<ThreatLogItem | null>(null);
 
-  // POS State
-  const [posStatus, setPosStatus] = useState<PosStatus>('IDLE');
-  const [posAmount, setPosAmount] = useState<number>(1500);
-  const [posPhone, setPosPhone] = useState<string>('+254712345678');
-  const [authToken, setAuthToken] = useState<string | null>(null);
-  const [capturedDigit, setCapturedDigit] = useState<string | null>(null);
-  const [posHistory, setPosHistory] = useState([
-    {
-      id: 'tx-901',
-      time: '12:44:10',
-      phone: '+254 712 *** 678',
-      amount: 1500,
-      token: '#AT-98214',
-      status: 'AUTHENTICATED',
-    },
-    {
-      id: 'tx-900',
-      time: '12:31:05',
-      phone: '+254 722 *** 110',
-      amount: 4200,
-      token: '#AT-31802',
-      status: 'AUTHENTICATED',
-    },
-    {
-      id: 'tx-899',
-      time: '12:15:22',
-      phone: '+254 701 *** 892',
-      amount: 800,
-      token: '#AT-54199',
-      status: 'AUTHENTICATED',
-    },
-  ]);
-
-  // Modals & Drawers
-  const [isDtmfModalOpen, setIsDtmfModalOpen] = useState(false);
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [atLogs, setAtLogs] = useState<AtWebhookLog[]>(INITIAL_AT_LOGS);
 
@@ -332,98 +280,6 @@ export default function App() {
     };
   };
 
-  // POS Handshake Trigger
-  const handleTriggerPosVerify = async (amount: number, phone: string) => {
-    setPosStatus('CALLING');
-    setCapturedDigit(null);
-    setAuthToken(null);
-    playAlertChime();
-
-    // Log outbound voice XML to AT Inspector
-    const newLog: AtWebhookLog = {
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      endpoint: '/api/webhooks/at/voice-callback',
-      method: 'POST',
-      direction: 'OUTBOUND',
-      status: 200,
-      contentType: 'application/xml',
-      description: `Outbound Zero-Trust IVR Call dispatched to ${phone}`,
-      payload: `<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <GetDigits callbackUrl="https://api.chapaa-guard.ke/api/webhooks/at/voice-dtmf" finishOnKey="#" timeout="15" numDigits="1">
-    <Say voice="woman">Authorize payment of KES ${amount} at MERCHANT-NAIROBI-HQ. Dial 1 to confirm or 0 to cancel.</Say>
-  </GetDigits>
-  <Say voice="woman">No input received. Transaction aborted.</Say>
-</Response>`,
-    };
-    setAtLogs((prev) => [newLog, ...prev]);
-
-    // Automatically pop open the interactive DTMF keypad modal simulating customer's phone
-    setTimeout(() => {
-      setIsDtmfModalOpen(true);
-    }, 350);
-
-    return { success: true, status: 'CALLING' };
-  };
-
-  // DTMF Keypress Capture
-  const handleCaptureDtmfDigit = (digit: string) => {
-    setCapturedDigit(digit);
-
-    if (digit === '1') {
-      playAlertChime(); // Subtle success chime
-      const generatedToken = '#AT-98214';
-      setAuthToken(generatedToken);
-      setPosStatus('AUTHENTICATED');
-      setMetrics((prev) => ({
-        ...prev,
-        posHandshakes: prev.posHandshakes + 1,
-      }));
-
-      // Add new transaction to top of ZERO-TRUST AUDIT LEDGER
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      });
-      const newTx = {
-        id: `tx-${Date.now()}`,
-        time: timeStr,
-        phone: posPhone,
-        amount: posAmount,
-        token: generatedToken,
-        status: 'AUTHENTICATED',
-      };
-      setPosHistory((prev) => [newTx, ...prev]);
-
-      // Add to Africa's Talking log
-      const dtmfLog: AtWebhookLog = {
-        id: `log-${Date.now()}`,
-        timestamp: new Date().toISOString(),
-        endpoint: '/api/webhooks/at/voice-dtmf',
-        method: 'POST',
-        direction: 'INBOUND',
-        status: 200,
-        contentType: 'application/x-www-form-urlencoded',
-        description: `DTMF '1' Captured & Zero-Trust Token ${generatedToken} Generated`,
-        payload: `callerNumber=${encodeURIComponent(posPhone)}&dtmfDigits=1&sessionId=ATVoice_${Math.floor(Math.random() * 900000)}&authToken=${generatedToken}&amount=${posAmount}`,
-      };
-      setAtLogs((prev) => [dtmfLog, ...prev]);
-
-      // Auto-dismiss DTMF modal after visual confirmation
-      setTimeout(() => {
-        setIsDtmfModalOpen(false);
-      }, 1000);
-    } else if (digit === '0') {
-      setPosStatus('REJECTED');
-      setTimeout(() => {
-        setIsDtmfModalOpen(false);
-      }, 800);
-    }
-  };
-
   // Replay Swahili Voice Warning
   const handleReplayVoiceWarning = (phone: string, paybill?: string) => {
     playAlertChime();
@@ -458,14 +314,6 @@ export default function App() {
               threats={threats}
               onSelectThreat={(t) => setSelectedThreat(t)}
               onTriggerAttack={handleTriggerAttack}
-              onTriggerPosVerify={handleTriggerPosVerify}
-              posStatus={posStatus}
-              authToken={authToken}
-              posAmount={posAmount}
-              posPhone={posPhone}
-              onSetPosAmount={setPosAmount}
-              onSetPosPhone={setPosPhone}
-              onOpenDtmfModal={() => setIsDtmfModalOpen(true)}
               onNavigateToView={(v) => setActiveTab(v as NavView)}
             />
           )}
@@ -487,20 +335,6 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'pos' && (
-            <MerchantPosView
-              posStatus={posStatus}
-              authToken={authToken}
-              posAmount={posAmount}
-              posPhone={posPhone}
-              posHistory={posHistory}
-              onSetPosAmount={setPosAmount}
-              onSetPosPhone={setPosPhone}
-              onTriggerPosVerify={handleTriggerPosVerify}
-              onOpenDtmfModal={() => setIsDtmfModalOpen(true)}
-            />
-          )}
-
           {activeTab === 'canaries' && (
             <CanariesView
               probes={probes}
@@ -509,6 +343,8 @@ export default function App() {
               }}
             />
           )}
+
+          {activeTab === 'sim-swap' && <SimSwapView />}
 
           {activeTab === 'settings' && (
             <SettingsView onOpenInspector={() => setIsInspectorOpen(true)} />
@@ -521,18 +357,6 @@ export default function App() {
         threat={selectedThreat}
         onClose={() => setSelectedThreat(null)}
         onReplayVoiceWarning={handleReplayVoiceWarning}
-      />
-
-      {/* Clean DTMF Modal for Testing Keypad Authorization */}
-      <DtmfModal
-        isOpen={isDtmfModalOpen}
-        onClose={() => setIsDtmfModalOpen(false)}
-        onCaptureDigit={handleCaptureDtmfDigit}
-        amount={posAmount}
-        phone={posPhone}
-        isCalling={posStatus === 'CALLING'}
-        capturedDigit={capturedDigit}
-        authToken={authToken}
       />
 
       {/* Africa's Talking Protocol Inspector Modal */}

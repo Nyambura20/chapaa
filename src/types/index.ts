@@ -1,7 +1,5 @@
 export type ThreatCategory = 'SCHOOL_FEE' | 'LOAN_SCAM' | 'FAKE_REVERSAL' | 'SAFE';
 
-export type PosStatus = 'IDLE' | 'CALLING' | 'AUTHENTICATED' | 'REJECTED';
-
 export interface ThreatLogItem {
   id: string;
   sender_phone: string;
@@ -29,16 +27,6 @@ export interface ThreatLogItem {
   created_at: string;
 }
 
-export interface PosTransactionItem {
-  id: string;
-  merchant_id: string;
-  customer_phone: string;
-  amount: number;
-  auth_token?: string | null;
-  status: PosStatus;
-  created_at: string;
-}
-
 export interface ProbeDevice {
   id: string;
   model: string;
@@ -56,7 +44,6 @@ export interface KpiMetrics {
   scamsIntercepted: number;
   scamsTrend: string;
   schoolFeeBlocked: number;
-  posHandshakes: number;
   devicePings: number;
   liveCanaries: number;
 }
