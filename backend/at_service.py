@@ -6,16 +6,29 @@ and USSD with automatic sandbox fallback and XML response builders.
 
 import os
 import logging
+from pathlib import Path
 from typing import Dict, Any, List, Optional
+
+from dotenv import load_dotenv
+
+_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 logger = logging.getLogger("chapaa.at_service")
 
-# AT Environment Variables
-AT_USERNAME = os.getenv("AT_USERNAME", "sandbox")
-AT_API_KEY = os.getenv("AT_API_KEY", "")
-AT_SENDER_ID = os.getenv("AT_SENDER_ID", None)
-AT_VOICE_PHONE_NUMBER = os.getenv("AT_VOICE_PHONE_NUMBER", "+254711082000")
-SERVER_BASE_URL = os.getenv("SERVER_BASE_URL", "https://api.chapaa-guard.ke")
+# AT Environment Variables. Refreshed from .env on each send so the file wins
+# over the Settings screen and over an empty value left in the process.
+AT_USERNAME = "sandbox"
+AT_API_KEY = ""
+AT_SENDER_ID = None
+AT_VOICE_PHONE_NUMBER = "+254711082000"
+SERVER_BASE_URL = "http://127.0.0.1:8000"
+_PLACEHOLDER_KEYS = {
+    "",
+    "placeholder",
+    "MY_AT_API_KEY",
+    "MY_AFRICASTALKING_API_KEY",
+}
+_loaded_signature: Optional[tuple] = None
 
 # Initialize Africa's Talking SDK safely
 _sms_client = None
@@ -23,18 +36,44 @@ _voice_client = None
 _is_initialized = False
 _pending_voice_messages: Dict[str, str] = {}
 
-try:
-    if AT_API_KEY and AT_API_KEY != "placeholder" and AT_API_KEY != "MY_AT_API_KEY":
+def _refresh_credentials() -> None:
+    """Load .env again. Values in that file replace anything already in the process."""
+    global AT_USERNAME, AT_API_KEY, AT_SENDER_ID, AT_VOICE_PHONE_NUMBER, SERVER_BASE_URL
+    global _sms_client, _voice_client, _is_initialized, _loaded_signature
+
+    load_dotenv(_ENV_PATH, override=True)
+    username = (os.getenv("AT_USERNAME") or "sandbox").strip().strip('"').strip("'") or "sandbox"
+    api_key = (os.getenv("AT_API_KEY") or "").strip().strip('"').strip("'")
+    sender = (os.getenv("AT_SENDER_ID") or "").strip().strip('"').strip("'") or None
+    voice = (os.getenv("AT_VOICE_PHONE_NUMBER") or "+254711082000").strip().strip('"').strip("'")
+    base = (os.getenv("SERVER_BASE_URL") or "http://127.0.0.1:8000").strip()
+    signature = (username, api_key, sender, voice)
+    AT_USERNAME = username
+    AT_API_KEY = api_key
+    AT_SENDER_ID = sender
+    AT_VOICE_PHONE_NUMBER = voice
+    SERVER_BASE_URL = base
+    if signature == _loaded_signature:
+        return
+    _loaded_signature = signature
+    _sms_client = None
+    _voice_client = None
+    _is_initialized = False
+    if api_key in _PLACEHOLDER_KEYS:
+        logger.warning("AT_API_KEY not configured. Running AT Service in high-fidelity Sandbox Simulator mode.")
+        return
+    try:
         import africastalking
-        africastalking.initialize(username=AT_USERNAME, api_key=AT_API_KEY)
+        africastalking.initialize(username=username, api_key=api_key)
         _sms_client = africastalking.SMS
         _voice_client = africastalking.Voice
         _is_initialized = True
-        logger.info("Africa's Talking SDK initialized successfully in %s mode.", AT_USERNAME)
-    else:
-        logger.warning("AT_API_KEY not configured. Running AT Service in high-fidelity Sandbox Simulator mode.")
-except Exception as e:
-    logger.error("Failed to initialize africastalking SDK: %s. Using Sandbox Simulator.", str(e))
+        logger.info("Africa's Talking SDK initialized successfully in %s mode.", username)
+    except Exception as exc:
+        logger.error("Failed to initialize africastalking SDK: %s. Using Sandbox Simulator.", exc)
+
+
+_refresh_credentials()
 
 
 class AfricasTalkingService:
@@ -42,7 +81,13 @@ class AfricasTalkingService:
 
     @staticmethod
     def is_live_mode() -> bool:
+        _refresh_credentials()
         return _is_initialized and _sms_client is not None
+
+    @staticmethod
+    def username() -> str:
+        _refresh_credentials()
+        return AT_USERNAME
 
     @classmethod
     async def send_sms(cls, recipient: str, message: str) -> Dict[str, Any]:
@@ -127,6 +172,11 @@ class AfricasTalkingService:
         }
 
     @staticmethod
+    def queue_spoken(phone: str, text: str) -> None:
+        """Store the words the voice callback should speak when the person answers."""
+        _pending_voice_messages[phone] = text
+
+    @staticmethod
     def pop_pending_voice(numbers: List[str]) -> Optional[str]:
         for number in numbers:
             if not number:
@@ -200,16 +250,15 @@ class AfricasTalkingService:
         }
 
     @classmethod
-    async def send_confirmation(cls, phone: str, channel: str, code: str) -> Dict[str, Any]:
-        text = (
-            f"SIM Shield code: {code}. "
-            "This confirms your demo SIM swap request. It expires in 10 minutes."
-        )
+    async def send_confirmation(cls, phone: str, channel: str, code: str, language: str = "sw") -> Dict[str, Any]:
+        if language == "sw":
+            text = f"Nambari ya Chapaa: {code}. Inaisha baada ya dakika 10."
+            spoken = f"Nambari yako ni {', '.join(code)}. Andika kwenye skrini."
+        else:
+            text = f"Chapaa code: {code}. It expires in 10 minutes."
+            spoken = f"Your code is {', '.join(code)}. Type it on the screen."
         if channel == "call":
-            _pending_voice_messages[phone] = (
-                f"Your SIM Shield confirmation code is {', '.join(code)}. "
-                "Enter it on the screen. Goodbye."
-            )
+            _pending_voice_messages[phone] = spoken
             return await cls.trigger_voice_warning_call(phone)
         if channel == "whatsapp":
             logger.info("WhatsApp confirmation to %s is recorded. Live WhatsApp needs account approval.", phone)

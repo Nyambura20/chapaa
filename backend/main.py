@@ -8,6 +8,7 @@ import hashlib
 import logging
 import os
 import secrets
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -16,7 +17,10 @@ from typing import Any, Dict, List, Optional
 from fastapi import (
     FastAPI,
     Depends,
+    File,
+    Form,
     HTTPException,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
     Request,
@@ -25,26 +29,42 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, text
 
 from backend.database import engine, Base, get_db
+from backend.seed_db import ensure_reference_data
 from backend.models import (
     AuditLog,
     BlacklistEntity,
     KycAttempt,
     QoSTelemetry,
+    ReportedEntity,
     SimSwapRequest,
     SimSwapStatus,
+    SpamCheck,
+    SpamVerdict,
     ThreatCategory,
     ThreatLog,
     VerifiedEntity,
 )
-from backend.face_match import FACE_PASS_SCORE, FaceMatchError, compare_faces
+from backend.spam_check import (
+    LIKELY_SCAM,
+    advice_for,
+    apply_rules,
+    check_links,
+    classify_with_llm,
+    combine,
+    extract_entities,
+    synthesize_speech,
+    transcribe_speech,
+)
+from backend.face_match import FACE_PASS_SCORE, FaceMatchError, judge_faces
 from backend.parser import (
     extract_entities_from_text,
     classify_category,
     compute_threat_score,
 )
+from backend.counties import COUNTY_NAMES
 from backend.at_service import AfricasTalkingService
 from backend.websocket_manager import ws_manager
 
@@ -55,13 +75,27 @@ logging.basicConfig(
 logger = logging.getLogger("chapaa.main")
 
 
+def _ensure_spam_county(sync_conn) -> None:
+    """Add the county column on databases created before the fraud map."""
+    dialect = sync_conn.dialect.name
+    if dialect == "sqlite":
+        rows = sync_conn.execute(text("PRAGMA table_info(spam_checks)")).fetchall()
+        if not rows or any(row[1] == "county" for row in rows):
+            return
+        sync_conn.execute(text("ALTER TABLE spam_checks ADD COLUMN county VARCHAR(40)"))
+        return
+    sync_conn.execute(text("ALTER TABLE spam_checks ADD COLUMN IF NOT EXISTS county VARCHAR(40)"))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: initialize database schemas and seed default entries."""
     logger.info("Initializing CHAPAA-GUARD tables...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_spam_county)
     logger.info("Database schemas verified.")
+    await ensure_reference_data()
     yield
     logger.info("Shutting down CHAPAA-GUARD engine.")
     await engine.dispose()
@@ -281,6 +315,41 @@ class SimSwapStartRequest(BaseModel):
     phone: str = Field(..., example="+254712345678")
     channel: str = Field(default="sms", example="sms")
     consent: bool = False
+    scenario: str = "safe"
+    language: str = "sw"
+
+
+class SimSwapRecoverRequest(BaseModel):
+    request_id: str
+
+
+def _kenyan_phone(raw: str) -> str:
+    """Accept 07…, 01…, 254…, or +254… and return +254…"""
+    digits = "".join(ch for ch in raw.strip() if ch.isdigit())
+    if digits.startswith("254") and len(digits) == 12 and digits[3] in "17":
+        return f"+{digits}"
+    if digits.startswith("0") and len(digits) == 10 and digits[1] in "17":
+        return f"+254{digits[1:]}"
+    if len(digits) == 9 and digits[0] in "17":
+        return f"+254{digits}"
+    raise HTTPException(
+        status_code=400,
+        detail="Use a Kenyan number, like 07... or +254...",
+    )
+
+
+def _ussd_menu(language: str) -> Dict[str, Any]:
+    if language == "en":
+        text = "CHAPAA\n1. Face check\n2. Stop"
+    else:
+        text = "CHAPAA\n1. Ukaguzi wa uso\n2. Simama"
+    return {
+        "text": text,
+        "options": [
+            {"key": "1", "action": "face_check"},
+            {"key": "2", "action": "stop"},
+        ],
+    }
 
 
 class SimSwapKycRequest(BaseModel):
@@ -288,6 +357,7 @@ class SimSwapKycRequest(BaseModel):
     id_photo: str
     selfie: str
     liveness_code: str
+    language: str = "sw"
 
 
 class SimSwapConfirmRequest(BaseModel):
@@ -307,23 +377,34 @@ async def start_sim_swap(
     if not payload.consent:
         raise HTTPException(status_code=400, detail="Consent is required before the camera opens.")
 
-    phone = payload.phone.strip().replace(" ", "")
-    if not phone.startswith("+") or not phone[1:].isdigit() or len(phone) < 10:
-        raise HTTPException(status_code=400, detail="Use the full phone number, starting with +254.")
-
+    phone = _kenyan_phone(payload.phone)
     channel = payload.channel.lower()
     if channel not in {"sms", "call", "whatsapp"}:
         raise HTTPException(status_code=400, detail="Channel must be sms, call, or whatsapp.")
+    scenario = payload.scenario.lower()
+    if scenario not in {"safe", "attack"}:
+        raise HTTPException(status_code=400, detail="Choose a safe line or a SIM swap attack.")
+    language = payload.language.lower() if payload.language.lower() in {"en", "sw"} else "sw"
 
-    check = await AfricasTalkingService.check_sim_swap(phone)
+    clock = time.perf_counter()
+    steps: List[Dict[str, Any]] = [{"at": 0.0, "code": "checking"}]
+    # The judge toggle decides the flag. Insights is not called, so a live key
+    # cannot hide the attack or invent a swap on a safe line.
+    if scenario == "attack":
+        swap_status, risk, row_status = "Swapped", "HIGH", SimSwapStatus.REJECTED
+        steps.append({"at": round(time.perf_counter() - clock, 1), "code": "flag"})
+    else:
+        swap_status, risk, row_status = "NoSwapDate", "LOW", SimSwapStatus.PENDING
+        steps.append({"at": round(time.perf_counter() - clock, 1), "code": "clear"})
+
     liveness_code = f"{secrets.randbelow(10000):04d}"
     request_row = SimSwapRequest(
         phone=phone,
         channel=channel,
-        swap_check_status=check.get("status", "Failed"),
-        risk_level=check.get("risk_level", "UNKNOWN"),
+        swap_check_status=swap_status,
+        risk_level=risk,
         kyc_status="PENDING",
-        status=SimSwapStatus.PENDING,
+        status=row_status,
         liveness_code_hash=_hash_code(liveness_code),
         created_at=datetime.utcnow(),
     )
@@ -331,24 +412,106 @@ async def start_sim_swap(
     await db.commit()
     await db.refresh(request_row)
 
+    sms_mode = None
+    if scenario == "attack":
+        text = (
+            "CHAPAA: Attempt blocked. A recent SIM swap was detected on this line. "
+            "The network was not asked to swap the SIM."
+            if language == "en"
+            else "CHAPAA: Jaribio limezuiwa. Laini hii imebadilishwa hivi karibuni. "
+            "Mtandao haujaombwa kubadili SIM."
+        )
+        dispatch = await AfricasTalkingService.send_sms(phone, text)
+        sms_mode = dispatch.get("mode")
+        steps.append({
+            "at": round(time.perf_counter() - clock, 1),
+            "code": "sms_sent" if dispatch.get("success") else "sms_skipped",
+        })
+        steps.append({"at": round(time.perf_counter() - clock, 1), "code": "blocked"})
+    else:
+        steps.append({"at": round(time.perf_counter() - clock, 1), "code": "sms_skipped"})
+        steps.append({"at": round(time.perf_counter() - clock, 1), "code": "continue"})
+
     db.add(AuditLog(
         actor=phone,
         action="SIM_SWAP_STARTED",
         entity="sim_swap_requests",
         entity_id=str(request_row.id),
-        meta={"swap_check_status": request_row.swap_check_status, "risk_level": request_row.risk_level},
+        meta={
+            "scenario": scenario,
+            "swap_check_status": swap_status,
+            "risk_level": risk,
+            "sms_mode": sms_mode,
+        },
         created_at=datetime.utcnow(),
     ))
     await db.commit()
 
-    return {
+    body: Dict[str, Any] = {
         "request_id": str(request_row.id),
         "phone": phone,
         "channel": channel,
+        "scenario": scenario,
+        "swap_check_status": swap_status,
+        "risk_level": risk,
+        "status": row_status.value,
+        "blocked": scenario == "attack",
+        "steps": steps,
+        "check_mode": "judge_toggle",
+        "sms_mode": sms_mode,
+        "note": "This does not swap the SIM. Only the mobile network can do that.",
+    }
+    if scenario == "attack":
+        body["recovery_path"] = f"/?recover={request_row.id}"
+        body["ussd"] = _ussd_menu(language)
+    else:
+        body["liveness_challenge"] = liveness_code
+    return body
+
+
+@app.post("/api/sim-swap/recover")
+async def recover_sim_swap(
+    payload: SimSwapRecoverRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reopen the face check for a line that was blocked after a recent swap."""
+    try:
+        request_uuid = uuid.UUID(payload.request_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Unknown request.") from exc
+
+    result = await db.execute(select(SimSwapRequest).where(SimSwapRequest.id == request_uuid))
+    request_row = result.scalars().first()
+    if request_row is None:
+        raise HTTPException(status_code=404, detail="SIM swap request not found.")
+    if request_row.risk_level != "HIGH":
+        raise HTTPException(status_code=400, detail="This line was not blocked.")
+    if request_row.status in {SimSwapStatus.COMPLETED, SimSwapStatus.CODE_SENT}:
+        raise HTTPException(status_code=400, detail="This request is already finished.")
+
+    liveness_code = f"{secrets.randbelow(10000):04d}"
+    request_row.status = SimSwapStatus.PENDING
+    request_row.kyc_status = "PENDING"
+    request_row.liveness_code_hash = _hash_code(liveness_code)
+    db.add(AuditLog(
+        actor=request_row.phone,
+        action="SIM_SWAP_RECOVERED",
+        entity="sim_swap_requests",
+        entity_id=str(request_row.id),
+        meta={"risk_level": request_row.risk_level},
+        created_at=datetime.utcnow(),
+    ))
+    await db.commit()
+    return {
+        "request_id": str(request_row.id),
+        "phone": request_row.phone,
+        "channel": request_row.channel,
+        "scenario": "attack",
         "swap_check_status": request_row.swap_check_status,
         "risk_level": request_row.risk_level,
+        "status": request_row.status.value,
+        "blocked": False,
         "liveness_challenge": liveness_code,
-        "check_mode": check.get("mode"),
         "note": "This does not swap the SIM. Only the mobile network can do that.",
     }
 
@@ -374,6 +537,8 @@ async def submit_sim_swap_kyc(
     typed = payload.liveness_code.strip()
     liveness_passed = bool(request_row.liveness_code_hash) and _hash_code(typed) == request_row.liveness_code_hash
     if not liveness_passed:
+        request_row.status = SimSwapStatus.REJECTED
+        request_row.kyc_status = "FAILED"
         db.add(KycAttempt(
             request_id=request_row.id,
             similarity_score=0,
@@ -381,11 +546,19 @@ async def submit_sim_swap_kyc(
             result="FAILED",
             created_at=datetime.utcnow(),
         ))
+        db.add(AuditLog(
+            actor=request_row.phone,
+            action="SIM_SWAP_REJECTED",
+            entity="sim_swap_requests",
+            entity_id=str(request_row.id),
+            meta={"reason": "liveness"},
+            created_at=datetime.utcnow(),
+        ))
         await db.commit()
-        raise HTTPException(status_code=400, detail="The 4-digit challenge does not match. Read the number on the screen.")
+        raise HTTPException(status_code=400, detail="The 4-digit challenge does not match. Start again.")
 
     try:
-        score, reason = compare_faces(payload.id_photo, payload.selfie)
+        score, reason = await judge_faces(payload.id_photo, payload.selfie)
     except FaceMatchError as exc:
         db.add(KycAttempt(
             request_id=request_row.id,
@@ -396,6 +569,8 @@ async def submit_sim_swap_kyc(
         ))
         await db.commit()
         raise HTTPException(status_code=400, detail=exc.message) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Face check could not run. Try the photos again.") from exc
     finally:
         payload.id_photo = ""
         payload.selfie = ""
@@ -411,6 +586,15 @@ async def submit_sim_swap_kyc(
 
     if not passed:
         request_row.kyc_status = "FAILED"
+        request_row.status = SimSwapStatus.REJECTED
+        db.add(AuditLog(
+            actor=request_row.phone,
+            action="SIM_SWAP_REJECTED",
+            entity="sim_swap_requests",
+            entity_id=str(request_row.id),
+            meta={"similarity_score": score, "reason": reason},
+            created_at=datetime.utcnow(),
+        ))
         await db.commit()
         raise HTTPException(
             status_code=400,
@@ -423,8 +607,9 @@ async def submit_sim_swap_kyc(
     request_row.liveness_code_hash = None
     request_row.confirm_code_hash = _hash_code(code)
     request_row.confirm_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    language = payload.language.lower() if payload.language.lower() in {"en", "sw"} else "sw"
     dispatch = await AfricasTalkingService.send_confirmation(
-        request_row.phone, request_row.channel, code
+        request_row.phone, request_row.channel, code, language
     )
     db.add(AuditLog(
         actor=request_row.phone,
@@ -488,6 +673,113 @@ async def confirm_sim_swap(
         "simulated": True,
         "message": "Recorded in the audit log. The mobile network was not asked to swap this SIM.",
     }
+
+
+class SpamCheckRequest(BaseModel):
+    phone: str = Field(..., example="+254712345678")
+    message: str = Field(..., min_length=1)
+    channel: str = Field(default="sms", example="sms")
+    language: str = "sw"
+    county: str = Field(..., example="Nairobi")
+
+
+@app.post("/api/spam-check")
+async def spam_check(
+    payload: SpamCheckRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Paste a message, score it, store the verdict, and deliver it by SMS or call.
+    """
+    phone = payload.phone.strip().replace(" ", "")
+    if not phone.startswith("+") or not phone[1:].isdigit() or len(phone) < 10:
+        raise HTTPException(status_code=400, detail="Use the full phone number, starting with +254.")
+    channel = payload.channel.lower()
+    if channel not in {"sms", "call"}:
+        raise HTTPException(status_code=400, detail="Choose sms or call.")
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Paste the message first.")
+    county = payload.county.strip()
+    if county not in COUNTY_NAMES:
+        raise HTTPException(status_code=400, detail="Choose your county first.")
+
+    entities = extract_entities(message)
+    blacklisted = await db.execute(select(BlacklistEntity.business_number))
+    reported_rows = await db.execute(select(ReportedEntity.entity_type, ReportedEntity.value))
+    verified_rows = await db.execute(
+        select(VerifiedEntity.business_number).where(VerifiedEntity.is_active == True)
+    )
+    reported = {(kind, value) for kind, value in reported_rows.all()}
+    for number in blacklisted.scalars().all():
+        reported.add(("paybill", number))
+        reported.add(("till", number))
+    verified = set(verified_rows.scalars().all())
+
+    verdict, reasons = apply_rules(message, entities, reported, verified)
+
+    for _url in await check_links(entities["links"]):
+        verdict = LIKELY_SCAM
+        reasons.append({
+            "sw": "Kiungo hiki kimewekwa alama kuwa hatari.",
+            "en": "This link is flagged as dangerous.",
+        })
+
+    llm = await classify_with_llm(message)
+    verdict, reasons = combine(verdict, reasons, llm)
+    advice = advice_for(verdict)
+    language = payload.language.lower() if payload.language.lower() in {"en", "sw"} else "sw"
+    spoken = advice["en"] if language == "en" else advice["sw"]
+    sms_text = advice["sms_en"] if language == "en" else advice["sms"]
+    if channel == "call":
+        AfricasTalkingService.queue_spoken(phone, spoken)
+        dispatch = await AfricasTalkingService.trigger_voice_warning_call(phone)
+    else:
+        dispatch = await AfricasTalkingService.send_sms(phone, sms_text)
+
+    row = SpamCheck(
+        phone=phone,
+        message_text=message,
+        extracted=entities,
+        verdict=SpamVerdict(verdict),
+        reasons=reasons,
+        channel=channel,
+        county=county,
+        created_at=datetime.utcnow(),
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    db.add(AuditLog(
+        actor=phone,
+        action="SPAM_VERDICT_SENT",
+        entity="spam_checks",
+        entity_id=str(row.id),
+        meta={
+            "verdict": verdict,
+            "channel": channel,
+            "county": county,
+            "mode": dispatch.get("mode"),
+            "model_read": bool(llm),
+        },
+        created_at=datetime.utcnow(),
+    ))
+    await db.commit()
+
+    body: Dict[str, Any] = {
+        "id": str(row.id),
+        "verdict": verdict,
+        "advice_sw": advice["sw"],
+        "advice_en": advice["en"],
+        "reasons": reasons,
+        "extracted": entities,
+        "channel": channel,
+        "dispatch_mode": dispatch.get("mode"),
+        "model_read": bool(llm),
+    }
+    if dispatch.get("mode") != "live":
+        body["sandbox_notice"] = spoken
+    return body
 
 
 # ==============================================================================
@@ -652,18 +944,52 @@ async def get_threat_logs(
 @app.get("/api/stats")
 async def get_kpi_stats(db: AsyncSession = Depends(get_db)):
     """Computes global KPI counters matching Zone A wireframe."""
-    threats_count = await db.scalar(select(func.count(ThreatLog.id))) or 39
+    threats_count = await db.scalar(select(func.count(ThreatLog.id))) or 0
     school_scams = await db.scalar(
         select(func.count(ThreatLog.id)).where(ThreatLog.category == ThreatCategory.SCHOOL_FEE)
-    ) or 112
-    pings = await db.scalar(select(func.count(QoSTelemetry.id))) or 1892
+    ) or 0
+    pings = await db.scalar(select(func.count(QoSTelemetry.id))) or 0
+    devices = await db.scalar(select(func.count(func.distinct(QoSTelemetry.device_model)))) or 0
 
     return {
         "scams_intercepted": threats_count,
         "school_fee_fraud_blocked": school_scams,
         "device_pings": pings,
-        "live_canaries": 2,
+        "live_canaries": devices,
     }
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+    language: str = "sw"
+
+
+@app.post("/api/transcribe")
+async def transcribe_message(
+    file: UploadFile = File(...),
+    language: str = Form("sw"),
+):
+    """A person reads an SMS aloud. Return the words so the message check can score them."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="No words were heard.")
+    if len(raw) > 5_000_000:
+        raise HTTPException(status_code=400, detail="No words were heard.")
+    mime = (file.content_type or "audio/webm").split(";")[0].strip() or "audio/webm"
+    chosen = language.lower() if language.lower() in {"en", "sw"} else "sw"
+    text = await transcribe_speech(raw, mime, chosen)
+    if not text:
+        raise HTTPException(status_code=400, detail="No words were heard.")
+    return {"text": text}
+
+
+@app.post("/api/speak")
+async def speak_page(payload: SpeakRequest):
+    """Return a WAV of the page line so Sikia can play it in the browser."""
+    audio = await synthesize_speech(payload.text)
+    if not audio:
+        raise HTTPException(status_code=503, detail="The voice is not available. Try again.")
+    return Response(content=audio, media_type="audio/wav")
 
 
 @app.get("/api/health")
@@ -672,4 +998,6 @@ async def health_check():
         "status": "healthy",
         "service": "CHAPAA-GUARD Unified SecOps Center",
         "timestamp": datetime.utcnow().isoformat(),
+        "at_mode": "live" if AfricasTalkingService.is_live_mode() else "simulator",
+        "at_username": AfricasTalkingService.username(),
     }

@@ -26,7 +26,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable}`}>
-      <body className="bg-slate-50 text-slate-800 font-sans antialiased overflow-x-hidden selection:bg-sky-500 selection:text-white">
+      <body className="bg-slate-50 text-slate-800 font-sans antialiased overflow-x-hidden selection:bg-sky-200 selection:text-slate-900">
         {children}
       </body>
     </html>

@@ -13,7 +13,9 @@ export interface ThreatLogItem {
     account?: string | null;
     mpesa_code?: string | null;
   };
-  category: ThreatCategory;
+  category: ThreatCategory | string;
+  verdict?: string;
+  channel?: string;
   threat_score: number;
   reasons: string[];
   actions_taken: {
@@ -46,6 +48,37 @@ export interface KpiMetrics {
   schoolFeeBlocked: number;
   devicePings: number;
   liveCanaries: number;
+  messagesChecked?: number;
+  likelyScams?: number;
+  suspicious?: number;
+  clearChecks?: number;
+  simChecks?: number;
+  kycPassed?: number;
+  simCompleted?: number;
+}
+
+export interface FraudSpot {
+  county: string;
+  lat: number;
+  lng: number;
+  count: number;
+  likely: number;
+  suspicious: number;
+  latestPhone: string;
+  latestPaybill: string | null;
+  latestAt: string;
+}
+
+export interface SimSwapRow {
+  id: string;
+  phone: string;
+  channel: string;
+  swap_check_status: string;
+  risk_level: string;
+  kyc_status: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
 }
 
 export interface AtWebhookLog {

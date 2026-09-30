@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 import {
   Settings,
   Server,
   Key,
   Radio,
-  CheckCircle2,
   Terminal,
   ExternalLink,
   Shield,
@@ -12,14 +13,28 @@ import {
   Copy,
   Check,
 } from 'lucide-react';
+import { useLang } from '../lib/i18n';
 
 interface SettingsViewProps {
   onOpenInspector: () => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenInspector }) => {
+  const { t } = useLang();
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [ngrokBaseUrl, setNgrokBaseUrl] = useState<string>('https://chapaa-guard-tunnel.ngrok-free.app');
+  const [atMode, setAtMode] = useState<'live' | 'simulator' | 'offline'>('simulator');
+  const [atUsername, setAtUsername] = useState('…');
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/health`)
+      .then((response) => response.json())
+      .then((body) => {
+        setAtMode(body.at_mode === 'live' ? 'live' : 'simulator');
+        setAtUsername(body.at_username || 'sandbox');
+      })
+      .catch(() => setAtMode('offline'));
+  }, []);
 
   const endpoints = [
     {
@@ -51,8 +66,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenInspector }) =
       name: 'Sentinel QoS Telemetry',
       method: 'POST',
       url: '/api/telemetry/ping',
-      status: 'Live & Active (200 OK)',
-      type: 'Android Hardware Telemetry',
+      status: 'Sample probes',
+      type: 'Demo telemetry',
     },
   ];
 
@@ -69,10 +84,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenInspector }) =
         <div>
           <h2 className="text-base font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
             <Settings className="w-5 h-5 text-slate-700" />
-            <span>Gateway Telephony &amp; API Configuration</span>
+            <span>{t.pageSettings}</span>
           </h2>
           <p className="text-xs text-slate-500 font-sans">
-            Africa's Talking credentials, webhook endpoints, and SecOps integration parameters
+            {t.pageSettingsHint}
           </p>
         </div>
 
@@ -140,8 +155,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenInspector }) =
               <Key className="w-4 h-4 text-emerald-600" />
               <span>Africa's Talking Credentials</span>
             </span>
-            <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold">
-              Connected
+            <span
+              className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                atMode === 'live'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : 'bg-amber-50 text-amber-800 border-amber-200'
+              }`}
+            >
+              {atMode === 'live' ? 'Key loaded from .env' : atMode === 'offline' ? 'API offline' : 'Simulator'}
             </span>
           </div>
 
@@ -149,25 +170,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenInspector }) =
             <div>
               <span className="text-[10px] text-slate-500 uppercase block font-semibold">Username</span>
               <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200 mt-1">
-                <span className="text-slate-900 font-bold">sandbox</span>
-                <span className="text-[10px] text-slate-500 font-sans">Live Simulator Ready</span>
+                <span className="text-slate-900 font-bold">{atUsername}</span>
+                <span className="text-[10px] text-slate-500 font-sans">From .env</span>
               </div>
             </div>
 
             <div>
               <span className="text-[10px] text-slate-500 uppercase block font-semibold">AT API Key</span>
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-200 mt-1">
-                <span className="text-slate-700 font-mono">atsk_live_********************412</span>
-                <button
-                  onClick={() => handleCopy('apikey', 'atsk_live_29910294819284019283412')}
-                  className="text-slate-500 hover:text-slate-900 transition flex items-center gap-1 text-[10px] cursor-pointer"
-                >
-                  {copiedKey === 'apikey' ? (
-                    <span className="text-emerald-600 font-bold">Copied</span>
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                </button>
+              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 mt-1 text-slate-700 font-sans leading-relaxed">
+                {atMode === 'live'
+                  ? `Using the ${atUsername} key from .env. Simulate Attack sends a real SMS.`
+                  : 'No key was found in .env. Save AT_API_KEY there and click Simulate Attack again.'}
               </div>
             </div>
 

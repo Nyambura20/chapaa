@@ -4,7 +4,12 @@ Uses SQLAlchemy 2.0 async engine with PostgreSQL and asyncpg.
 """
 
 import os
+from pathlib import Path
 from typing import AsyncGenerator
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     async_sessionmaker,

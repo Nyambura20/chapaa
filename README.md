@@ -32,81 +32,57 @@
 
 ---
 
+The QoS map and canary devices in the console are sample data. The live demo path is the scam SMS score, the Swahili warning, and the SIM swap face check.
+
 ## 🚀 Quickstart Guide
 
 ### 1. Prerequisites
 - Python 3.11+
 - Node.js 18+ & npm
-- PostgreSQL 15+ (or Docker)
-- Africa's Talking Account ([africastalking.com](https://africastalking.com/)) with Sandbox or Live API Key
+- An Africa's Talking sandbox account if you want a real SMS and call. With no API key, those steps stay on this machine.
 
-### 2. Database Setup via Docker Compose
-
-```yaml
-# docker-compose.yml
-version: '3.8'
-services:
-  db:
-    image: postgres:15-alpine
-    restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: chapaa_guard
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
-volumes:
-  pgdata:
-```
-
-Start the database:
-```bash
-docker compose up -d
-```
-
-### 3. Backend Setup (FastAPI + Async SQLAlchemy)
+### 2. Backend (FastAPI, SQLite by default)
 
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+cp .env.example .env
+# Put your sandbox key in AT_API_KEY. Leave AT_SENDER_ID empty.
 
-# Seed the database with 5 accredited schools/banks and 3 known fraud entities
-python seed_db.py
+# Optional: seed accredited schools/banks and known fraud Paybills
+python -m backend.seed_db
 
-# Start the FastAPI engine with Uvicorn
 uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 4. Exposing Africa's Talking Webhooks (ngrok)
+The API creates `chapaa_guard.db` in the working directory. Set `DATABASE_URL` only if you want Postgres.
+
+### 3. Africa's Talking callbacks
 
 ```bash
 ngrok http 8000
 ```
-Copy the Forwarding URL (e.g. `https://your-domain.ngrok-free.app`) and configure it in your **Africa's Talking Sandbox Dashboard**:
-- **SMS Callback URL**: `https://your-domain.ngrok-free.app/api/webhooks/at/incoming-sms`
-- **Voice Callback URL**: `https://your-domain.ngrok-free.app/api/webhooks/at/voice-callback`
 
-### 5. Running the Next.js Dashboard
+Point the sandbox dashboard at the ngrok host, not the Next.js port:
+- SMS callback: `https://your-domain.ngrok-free.app/api/webhooks/at/incoming-sms`
+- Voice callback: `https://your-domain.ngrok-free.app/api/webhooks/at/voice-callback`
+
+Set `SERVER_BASE_URL` in `.env` to that same ngrok URL and restart the API. `GET /api/health` reports `at_mode: live` when the key loaded, and `simulator` when it did not.
+
+### 4. Next.js dashboard
 
 ```bash
 npm install
 npm run dev
 ```
-Open [http://localhost:3000](http://localhost:3000) in your browser. The dashboard is a Next.js app. The fraud engine stays on FastAPI at port 8000.
+
+Open [http://localhost:3000](http://localhost:3000). The fraud engine stays on port 8000.
 
 ---
 
-## 🎯 Verification & Testing Scenarios
+## 🎯 Demo path
 
-1. **Smishing Interception**: Forward or simulate test SMS:
-   - *"Dear Parent, pay KES 14,500 Term 3 fees to Paybill 522123 Acc 0178 MARANDA."*
-   - Observe automatic extraction of Paybill `522123`, cross-check against blacklist, 94% threat score, automated two-way warning SMS dispatch, and a Swahili outbound voice warning. When the call is answered, the voice callback returns XML that plays the warning.
-2. **SIM Swap Check**: Open **SIM Swap** in the sidebar. Agree to the camera, enter a phone number, and start the check. A number ending in `999` is treated as a recent swap in sandbox mode. Capture an ID photo and a live selfie, type the 4-digit challenge, then enter the confirmation code. The request is marked completed in the database. The mobile network is not asked to swap the SIM.
-3. **QoS Sentinel Telemetry**:
-   - Inspect live hardware probe pings for `Infinix mobility X692-GL` (Changamwe) and `Samsung A55x` (Bamburi).
-   - View latency sparklines and Communications Authority (CA) compliance metrics.
+1. **Scam SMS.** On the dashboard, run the Maranda fee message. Paybill `522123` scores as a school-fee scam. With a sandbox key, Simulate Attack sends the warning SMS and places the Swahili call. Without a key, the screen says the score stayed local.
+2. **SIM swap.** Open **SIM Swap**. A number ending in `999` is a recent swap while `at_mode` is `simulator`. Capture an ID photo and a live selfie in similar light, type the 4-digit number, then the confirmation code. This records the check. It does not ask a mobile network to swap the SIM.
+3. **QoS and canaries** are labeled Demo. Use them as a second slide, not the proof that Africa's Talking is connected.

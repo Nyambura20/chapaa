@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../chapaa_guard.db"
+}
+
+model SpamCheck {
+  id          String  @id
+  phone       String
+  messageText String  @map("message_text")
+  extracted   String
+  verdict     String
+  reasons     String
+  channel     String
+  county      String?
+  createdAt   String  @map("created_at")
+
+  @@map("spam_checks")
+}
+
+model ThreatLog {
+  id              String @id
+  senderPhone     String @map("sender_phone")
+  rawText         String @map("raw_text")
+  extractedEntity String? @map("extracted_entity")
+  category        String
+  threatScore     Int    @map("threat_score")
+  actionsTaken    String @map("actions_taken")
+  createdAt       String @map("created_at")
+
+  @@map("threat_logs")
+}
+
+model QosTelemetry {
+  id            String @id
+  deviceModel   String @map("device_model")
+  wardLocation  String @map("ward_location")
+  signalDbm     Int    @map("signal_dbm")
+  pingLatencyMs Int    @map("ping_latency_ms")
+  timestamp     String
+
+  @@map("qos_telemetry")
+}
+
+model SimSwapRequest {
+  id               String  @id
+  phone            String
+  channel          String
+  swapCheckStatus  String  @map("swap_check_status")
+  riskLevel        String  @map("risk_level")
+  kycStatus        String  @map("kyc_status")
+  status           String
+  livenessCodeHash String? @map("liveness_code_hash")
+  confirmCodeHash  String? @map("confirm_code_hash")
+  confirmExpiresAt String? @map("confirm_expires_at")
+  createdAt        String  @map("created_at")
+  completedAt      String? @map("completed_at")
+
+  @@map("sim_swap_requests")
+}

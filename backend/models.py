@@ -150,6 +150,43 @@ class KycAttempt(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class SpamVerdict(str, enum.Enum):
+    LIKELY_SCAM = "LIKELY_SCAM"
+    SUSPICIOUS = "SUSPICIOUS"
+    NO_RED_FLAGS_FOUND = "NO_RED_FLAGS_FOUND"
+
+
+class SpamCheck(Base):
+    """One pasted message, the combined verdict, and how it was delivered."""
+    __tablename__ = "spam_checks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    phone = Column(String(50), nullable=False, index=True)
+    message_text = Column(Text, nullable=False)
+    extracted = Column(JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=dict)
+    verdict = Column(SQLEnum(SpamVerdict), nullable=False)
+    reasons = Column(JSONB().with_variant(JSON(), "sqlite"), nullable=False, default=list)
+    channel = Column(String(20), nullable=False)
+    county = Column(String(40), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class ReportedEntity(Base):
+    """Numbers, Paybills, Tills, and links already reported as malicious."""
+    __tablename__ = "reported_entities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entity_type = Column(String(20), nullable=False)
+    value = Column(String(300), nullable=False)
+    report_count = Column(Integer, nullable=False, default=1)
+    first_seen = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("idx_reported_type_value", "entity_type", "value", unique=True),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 

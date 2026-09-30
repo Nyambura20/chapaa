@@ -18,12 +18,83 @@ from backend.models import (
 )
 
 
+async def ensure_reference_data() -> None:
+    """Load official Paybills and known scam numbers once, if the tables are empty."""
+    from sqlalchemy import func, select
+
+    async with AsyncSessionLocal() as session:
+        verified_count = await session.scalar(select(func.count(VerifiedEntity.id))) or 0
+        if verified_count:
+            return
+        session.add_all([
+            VerifiedEntity(
+                name="Maranda High School",
+                entity_type=EntityType.SCHOOL,
+                business_number="890300",
+                official_account_prefix="ADM",
+                is_active=True,
+            ),
+            VerifiedEntity(
+                name="Kenya High School",
+                entity_type=EntityType.SCHOOL,
+                business_number="911200",
+                official_account_prefix="KHS",
+                is_active=True,
+            ),
+            VerifiedEntity(
+                name="Alliance High School",
+                entity_type=EntityType.SCHOOL,
+                business_number="800100",
+                official_account_prefix="AHS",
+                is_active=True,
+            ),
+            VerifiedEntity(
+                name="Kenya Commercial Bank (KCB M-PESA)",
+                entity_type=EntityType.BANK,
+                business_number="522522",
+                official_account_prefix=None,
+                is_active=True,
+            ),
+            VerifiedEntity(
+                name="Equity Bank Kenya",
+                entity_type=EntityType.BANK,
+                business_number="247247",
+                official_account_prefix=None,
+                is_active=True,
+            ),
+            BlacklistEntity(
+                business_number="522123",
+                reason="Rogue Paybill impersonating Maranda High School",
+                risk_score=98,
+                flag_count=14,
+            ),
+            BlacklistEntity(
+                business_number="98821",
+                reason="Predatory loan till charging an upfront fee",
+                risk_score=95,
+                flag_count=29,
+            ),
+            BlacklistEntity(
+                business_number="400200",
+                reason="Spoofed bank Paybill used in reversal scams",
+                risk_score=92,
+                flag_count=8,
+            ),
+        ])
+        await session.commit()
+
+
 async def seed():
     print("🌱 Connecting to database and creating tables if not present...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     async with AsyncSessionLocal() as session:
+        from sqlalchemy import func, select
+
+        already = await session.scalar(select(func.count(VerifiedEntity.id))) or 0
+        if already:
+            print("Reference Paybills already loaded. Seeding sample logs only if missing.")
         # 1. Seed 5 Verified Kenyan Schools & Banks
         verified_data = [
             VerifiedEntity(
@@ -170,8 +241,9 @@ async def seed():
             ),
         ]
 
-        session.add_all(verified_data)
-        session.add_all(blacklist_data)
+        if not already:
+            session.add_all(verified_data)
+            session.add_all(blacklist_data)
         session.add_all(initial_threats)
         session.add_all(initial_pings)
         await session.commit()

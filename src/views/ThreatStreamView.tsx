@@ -5,6 +5,7 @@ import {
   ShieldAlert,
   PhoneCall,
 } from 'lucide-react';
+import { useLang } from '../lib/i18n';
 import { ThreatLogItem } from '../types';
 
 interface ThreatStreamViewProps {
@@ -18,6 +19,7 @@ export const ThreatStreamView: React.FC<ThreatStreamViewProps> = ({
   onSelectThreat,
   onReplayVoiceWarning,
 }) => {
+  const { t } = useLang();
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
 
@@ -38,10 +40,10 @@ export const ThreatStreamView: React.FC<ThreatStreamViewProps> = ({
         <div>
           <h2 className="text-base font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
             <MessageSquareWarning className="w-5 h-5 text-rose-600" />
-            <span>Threat Stream (Chapaa-Scan Engine)</span>
+            <span>{t.pageThreats}</span>
           </h2>
           <p className="text-xs text-slate-500 font-sans">
-            Real-time heuristic classification, regex parameter extraction, and registry cross-checking
+            {t.pageThreatsHint}
           </p>
         </div>
 

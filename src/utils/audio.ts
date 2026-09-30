@@ -154,6 +154,83 @@ export function playAuthenticSwahiliWarning(
   };
 }
 
+const SWAHILI_DIGITS = ['sifuri', 'moja', 'mbili', 'tatu', 'nne', 'tano', 'sita', 'saba', 'nane', 'tisa'];
+const ENGLISH_DIGITS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+
+let currentVoice: AudioBufferSourceNode | null = null;
+
+function speakWithBrowser(text: string, lang: 'en' | 'sw') {
+  if (typeof window === 'undefined' || !window.speechSynthesis) return;
+  const synth = window.speechSynthesis;
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voices = synth.getVoices();
+  const prefix = lang === 'en' ? 'en' : 'sw';
+  const chosen =
+    voices.find((voice) => voice.lang.toLowerCase().startsWith(prefix)) ||
+    voices.find((voice) => voice.lang.toLowerCase().startsWith('en')) ||
+    voices[0];
+  if (chosen) {
+    utterance.voice = chosen;
+    utterance.lang = chosen.lang;
+  }
+  utterance.rate = 0.82;
+  utterance.volume = 1;
+  synth.cancel();
+  synth.speak(utterance);
+}
+
+/** Play a spoken recording of the page line. The computer's own voice stays as a backup. */
+export function speakAloud(text: string, lang: 'en' | 'sw' = 'sw') {
+  if (typeof window === 'undefined') return;
+  const ctx = getAudioContext();
+  if (ctx) void ctx.resume();
+  if (currentVoice) {
+    try {
+      currentVoice.stop();
+    } catch {
+      // The previous line already finished.
+    }
+    currentVoice = null;
+  }
+
+  void fetch(`${API_BASE}/api/speak`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, language: lang }),
+  })
+    .then(async (response) => {
+      if (!response.ok) throw new Error('no voice');
+      const bytes = await response.arrayBuffer();
+      const audioCtx = getAudioContext();
+      if (!audioCtx) throw new Error('no audio');
+      await audioCtx.resume();
+      const decoded = await audioCtx.decodeAudioData(bytes.slice(0));
+      const source = audioCtx.createBufferSource();
+      const gain = audioCtx.createGain();
+      gain.gain.value = 1.4;
+      source.buffer = decoded;
+      source.connect(gain);
+      gain.connect(audioCtx.destination);
+      currentVoice = source;
+      source.onended = () => {
+        if (currentVoice === source) currentVoice = null;
+      };
+      source.start();
+    })
+    .catch(() => speakWithBrowser(text, lang));
+}
+
+export function speakDigits(code: string, lang: 'en' | 'sw' = 'sw') {
+  const names = lang === 'en' ? ENGLISH_DIGITS : SWAHILI_DIGITS;
+  const lead = lang === 'en' ? 'Type these numbers.' : 'Andika nambari hizi.';
+  const words = code
+    .split('')
+    .map((digit) => names[Number(digit)] || digit)
+    .join('. ');
+  speakAloud(`${lead} ${words}.`, lang);
+}
+
 export function speakSwahiliWarning(
   text = "Onyo la utapeli. Nambari ya Paybill uliyotumiwa sio ya shule husika. Usilipe pesa zozote.",
   onEnd?: () => void
